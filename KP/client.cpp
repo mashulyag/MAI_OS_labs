@@ -1,68 +1,59 @@
 #include <iostream>
 #include <string>
 #include <unistd.h>
-#include <sys/types.h>
-#include <sys/wait.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 int main() {
-    int pipefd[2];
-    if (pipe(pipefd) == -1) {
-        std::cerr << "Ошибка при создании pipe." << std::endl;
+    // Создаем сокет
+    int clientSocket = socket(AF_INET, SOCK_STREAM, 0);
+    if (clientSocket == -1) {
+        std::cerr << "Ошибка при создании сокета." << std::endl;
         return 1;
     }
 
-    pid_t pid = fork();
-    if (pid == -1) {
-        std::cerr << "Ошибка при создании дочернего процесса." << std::endl;
+    // Указываем адрес и порт сервера
+    sockaddr_in serverAddr;
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(12345); // Порт сервера
+    serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1"); // Локальный адрес
+
+    // Подключаемся к серверу
+    if (connect(clientSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) == -1) {
+        std::cerr << "Ошибка при подключении к серверу." << std::endl;
+        close(clientSocket);
         return 1;
     }
 
-    if (pid == 0) {
-        // Дочерний процесс (server.cpp)
-        close(pipefd[0]);  // Закрываем конец pipe для чтения
+    std::cout << "Подключено к серверу." << std::endl;
 
-        // Перенаправляем стандартный вывод в pipe
-        dup2(pipefd[1], STDOUT_FILENO);
-        close(pipefd[1]);
+    std::string command;
+    while (true) {
+        // Выводим приглашение для ввода команды
+        std::cout << "> ";
+        std::getline(std::cin, command);
 
-        // Запускаем server.cpp
-        execlp("./server", "server", nullptr);
-
-        // Если execlp вернул управление, значит произошла ошибка
-        std::cerr << "Ошибка при запуске server.cpp." << std::endl;
-        return 1;
-    } else {
-        // Родительский процесс (client.cpp)
-        close(pipefd[1]);  // Закрываем конец pipe для записи
-
-        std::string command;
-        while (true) {
-            std::cout << "> ";
-            std::cin >> command;
-
-            // Отправляем команду в pipe
-            write(pipefd[0], command.c_str(), command.length());
-
-            // Читаем ответ из pipe
-            const int BUFFER_SIZE = 256;
-            char buffer[BUFFER_SIZE];
-            int bytesRead = read(pipefd[0], buffer, BUFFER_SIZE - 1);
-            if (bytesRead == -1) {
-                std::cerr << "Ошибка при чтении из pipe." << std::endl;
-                break;
-            } else if (bytesRead == 0) {
-                std::cout << "Сервер завершил работу." << std::endl;
-                break;
-            } else {
-                buffer[bytesRead] = '\0';
-                std::cout << buffer << std::endl;
-            }
+        // Если команда "exit", завершаем работу
+        if (command == "exit") {
+            break;
         }
 
-        // Ждем завершения дочернего процесса
-        int status;
-        waitpid(pid, &status, 0);
+        // Отправляем команду серверу
+        write(clientSocket, command.c_str(), command.length());
+
+        // Читаем ответ от сервера
+        char buffer[256];
+        int bytesRead = read(clientSocket, buffer, sizeof(buffer) - 1);
+        if (bytesRead <= 0) {
+            std::cout << "Сервер завершил работу." << std::endl;
+            break;
+        }
+        buffer[bytesRead] = '\0';
+        std::cout << buffer; // Выводим ответ сервера
     }
 
+    // Закрываем сокет
+    close(clientSocket);
     return 0;
 }
